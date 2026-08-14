@@ -37,6 +37,128 @@ npm install 8kinfe-llm-router
 
 > 本插件是 dsh 生态的**树外插件**，依赖宿主已安装的 `@deepseek-ai/dsh-agent` / `dsh-llm` / `dsh-settings` / `cordis`（这些由 dsh 本身提供，作为 peerDependencies 声明）。
 
+## 使用教程
+
+### 第 0 步：确认有可路由的模型
+
+Router 只从**已注册**的 Model Registry 里选模型，不硬编码任何模型名。先确认你的 dsh 里注册了至少一个 provider/model：
+
+- **DeepSeek 官方**：dsh 内置 `deepseek-official` provider（在 `.credentials.yaml` 配好 API Key 即可）。
+- **其他 OpenAI 兼容 API**（Kimi/月之暗面、阿里百炼、OpenRouter 等）：通过 `dsh-llm-pi-ai` 在 `settings.yaml` 里注册：
+
+```yaml
+llm-pi-ai:
+  providers:
+    moonshotai-cn:
+      apiKeyEnv: MOONSHOT_API_KEY   # 从环境变量读 Key
+      models:
+        - id: kimi-k2.6
+        - id: kimi-k2.7-code
+```
+
+> `provider` 名（`moonshotai-cn`）和 `model` 名（`kimi-k2.6`）就是后面 Router 配置里要引用的标识。
+
+### 第 1 步：安装插件
+
+进入 dsh 的 profile 目录（通常是 `~/.dsh/profiles/web`）：
+
+```bash
+npm install github:4060415/8kinfe-llm-router
+```
+
+### 第 2 步：挂载 + 最小配置
+
+编辑该 profile 的 `cordis.patch.yml`：
+
+```yaml
+- id: llm-router
+  name: '8kinfe-llm-router'
+  config:
+    mode: auto
+    preferred:
+      provider: deepseek-official
+      model: deepseek-v4-flash
+```
+
+启动 dsh 即可工作：普通聊天走 `preferred`，遇到图片/代码等任务会自动切换模型。
+
+### 第 3 步：声明模型能力（推荐）
+
+只有 `preferred` 时，特殊任务只能「兜底」。给模型标上能力元数据后，Router 才能「择优」：
+
+```yaml
+- id: llm-router
+  name: '8kinfe-llm-router'
+  config:
+    mode: auto
+    preferred:
+      provider: deepseek-official
+      model: deepseek-v4-flash
+    models:
+      deepseek-official/deepseek-v4-flash:
+        coding: 0.6
+        reasoning: 0.6
+        vision: 0        # 不支持图片
+        cost: 1
+        latency: 1
+      moonshotai-cn/kimi-k2.6:
+        coding: 0.5
+        reasoning: 0.7
+        vision: 1        # 支持图片
+        cost: 3
+        latency: 2
+```
+
+### 常见场景
+
+#### 场景 A：图片自动切视觉模型
+
+发一张图片，Router 在 `agent/pre-step` 识别到 image 后，会自动跳过不支持视觉的模型、改选 `vision: 1` 的 kimi-k2.6，而不是 flash。配好第 3 步的 `models` 即可，无需额外操作。
+
+#### 场景 B：代码任务走代码模型
+
+复杂代码任务会综合 `coding` / `reasoning` / `cost` / `latency` 加权打分，选综合最优的模型；任务越复杂，越偏向能力强的模型，简单任务则倾向便宜模型。
+
+#### 场景 C：限流自动换 provider（fallback）
+
+某 provider 触发 `RATE_LIMIT`（429）、`QUOTA`、`SERVER`、`TIMEOUT` 等临时/资源错误时，Router 自动 fallback 到**另一个 provider** 的模型并重试：
+
+```yaml
+    fallback:
+      enabled: true
+      routes: {}
+      # 留空 = 自动选不同 provider 的最强模型；也可显式指定：
+      # routes:
+      #   RATE_LIMIT: { provider: deepseek-official, model: deepseek-v4-flash }
+```
+
+#### 场景 D：能力不足自动升级（escalation）
+
+模型返回 `EMPTY_RESPONSE`（空回复）或 `CONTEXT_WINDOW_EXCEEDED`（超上下文）时，Router 升级到能力更强的模型，最多 `maxEscalations` 次：
+
+```yaml
+    escalation:
+      enabled: true
+      triggerCodes: [EMPTY_RESPONSE, CONTEXT_WINDOW_EXCEEDED]
+    maxEscalations: 2
+```
+
+### 验证路由
+
+临时开 `debug`：
+
+```yaml
+      debug: true
+```
+
+日志会打印每次请求的任务分类、各模型评分和最终选择（`llm-router: ...` 前缀），确认行为符合预期后关掉即可。
+
+### 手动接管
+
+对话里输入 `/model <name>` 或通过 UI 切换模型，Router 会尊重你的手动选择、不再改写；切回默认后重新接管。
+
+> 配置项完整说明见下文「配置」章节。
+
 ## 工作原理
 
 插入 DSH 的三个 agent 扩展点：
