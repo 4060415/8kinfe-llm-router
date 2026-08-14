@@ -9,6 +9,14 @@
 
 ## 安装
 
+### 从 GitHub 直接安装（推荐）
+
+```bash
+npm install github:4060415/8kinfe-llm-router
+```
+
+### 从 npm 安装（发布到 npm 后可用）
+
 ```bash
 npm install 8kinfe-llm-router
 ```
