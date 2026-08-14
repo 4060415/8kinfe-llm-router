@@ -52,16 +52,10 @@
 
 **前置条件**：已安装 DeepSeek Harness（`@deepseek-ai/dsh`）。
 
-### 从 GitHub 安装（推荐）
+### 从 GitHub 安装
 
 ```bash
 npm install github:4060415/8kinfe-llm-router
-```
-
-### 从 npm 安装（发布后可用）
-
-```bash
-npm install 8kinfe-llm-router
 ```
 
 ## 快速开始
