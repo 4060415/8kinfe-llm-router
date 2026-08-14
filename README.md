@@ -1,43 +1,72 @@
 # 8kinfe-llm-router
 
-可配置的模型自动路由插件：根据每次请求的任务需求，从**已注册的模型**中自动选择最合适的 provider/model，而不是固定使用一个模型。
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4E6EF2)](https://github.com/deepseek-ai/deepseek-harness)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178c6.svg)](https://www.typescriptlang.org/)
 
-- 不改 DSH 核心，纯插件实现。
-- 模型候选只来自 LLM Registry（`ctx.llm`），**不硬编码任何模型名**。
-- 支持视觉（图片）路由、代码任务路由、失败 fallback、能力升级 escalation（有上限）。
-- 自动路由可关闭、可手动覆盖、可配置成本/延迟策略。
+> DeepSeek Harness 的可配置智能模型路由插件：根据每次请求的任务需求，从**已注册的模型**中自动选择最合适的 provider/model，而非固定使用一个模型。
+
+**纯插件实现，零核心修改**——图片自动切视觉模型、代码任务切代码模型、限流自动换 provider、能力不足自动升级。
+
+## 目录
+
+- [为什么需要](#为什么需要)
+- [特性](#特性)
+- [安装](#安装)
+- [快速开始](#快速开始)
+- [工作原理](#工作原理)
+- [配置参考](#配置参考)
+- [Fallback 与 Escalation](#fallback-与-escalation)
+- [手动覆盖](#手动覆盖)
+- [安全边界](#安全边界)
+- [常见问题](#常见问题)
+- [测试](#测试)
+- [License](#license)
+
+## 为什么需要
+
+默认情况下，dsh 用固定一个模型处理所有请求，这会带来几个问题：
+
+| 问题 | 后果 |
+|------|------|
+| 图片发给纯文本模型 | 模型无视图片，答非所问（甚至卡住） |
+| 复杂代码 / 长文本发给轻量模型 | 能力不足，回复质量差、超上下文 |
+| 单个 provider 限流 / 故障 | 请求直接失败，无法自动恢复 |
+
+`llm-router` 在 `agent/request` 边界自动改写模型选择，让**每个请求都路由到最合适的模型**——你只需要写配置，不用改任何代码。
+
+## 特性
+
+- 🧩 **纯插件**：不改 DSH 核心，通过 npm 包即可安装。
+- 🎯 **智能分类**：规则 + 能力启发式识别 vision / coding / reasoning / tool_use / 长文本等任务（非 ML，可解释）。
+- 🖼️ **视觉路由**：图片自动切到支持视觉的模型。
+- 💻 **代码路由**：代码复杂度越高，越倾向能力强（贵）的模型。
+- 🔁 **自动 fallback**：限流 / 配额 / 超时等临时错误 → 换另一个 provider 重试。
+- ⬆️ **自动 escalation**：空回复 / 超上下文等能力不足 → 升级更强模型（有上限）。
+- 🔒 **安全边界**：模型只能从 Registry 选，任何「模型推荐」都经 `ModelRegistry.resolve()` 校验。
+- ⚙️ **可配置可关闭**：支持手动模式、`/model` 覆盖、成本 / 延迟策略。
 
 ## 安装
 
-### 从 GitHub 直接安装（推荐）
+本插件是 dsh 的**树外插件**（out-of-tree plugin），需与 dsh 一起使用。它依赖 dsh 已提供的 `cordis` / `dsh-agent` / `dsh-llm` / `dsh-settings`（作为 peerDependencies 声明）。
+
+**前置条件**：已安装 DeepSeek Harness（`@deepseek-ai/dsh`）。
+
+### 从 GitHub 安装（推荐）
 
 ```bash
 npm install github:4060415/8kinfe-llm-router
 ```
 
-### 从 npm 安装（发布到 npm 后可用）
+### 从 npm 安装（发布后可用）
 
 ```bash
 npm install 8kinfe-llm-router
 ```
 
-安装后在你的 profile 的 `cordis.patch.yml` 里挂载本插件（`id` 随意，`name` 必须是包名）：
+## 快速开始
 
-```yaml
-- id: llm-router
-  name: '8kinfe-llm-router'
-  config:
-    mode: auto
-    costPolicy: balanced
-    maxEscalations: 2
-    preferred:
-      provider: deepseek-official
-      model: deepseek-v4-flash
-```
-
-> 本插件是 dsh 生态的**树外插件**，依赖宿主已安装的 `@deepseek-ai/dsh-agent` / `dsh-llm` / `dsh-settings` / `cordis`（这些由 dsh 本身提供，作为 peerDependencies 声明）。
-
-## 使用教程
+> 示例中的 `provider` / `model` 名是示意，替换成你实际注册的即可。
 
 ### 第 0 步：确认有可路由的模型
 
@@ -80,7 +109,7 @@ npm install github:4060415/8kinfe-llm-router
       model: deepseek-v4-flash
 ```
 
-启动 dsh 即可工作：普通聊天走 `preferred`，遇到图片/代码等任务会自动切换模型。
+启动 dsh 即可工作：普通聊天走 `preferred`，遇到图片 / 代码等任务会自动切换模型。
 
 ### 第 3 步：声明模型能力（推荐）
 
@@ -121,7 +150,7 @@ npm install github:4060415/8kinfe-llm-router
 
 #### 场景 C：限流自动换 provider（fallback）
 
-某 provider 触发 `RATE_LIMIT`（429）、`QUOTA`、`SERVER`、`TIMEOUT` 等临时/资源错误时，Router 自动 fallback 到**另一个 provider** 的模型并重试：
+某 provider 触发 `RATE_LIMIT`（429）、`QUOTA`、`SERVER`、`TIMEOUT` 等临时 / 资源错误时，Router 自动 fallback 到**另一个 provider** 的模型并重试：
 
 ```yaml
     fallback:
@@ -157,11 +186,9 @@ npm install github:4060415/8kinfe-llm-router
 
 对话里输入 `/model <name>` 或通过 UI 切换模型，Router 会尊重你的手动选择、不再改写；切回默认后重新接管。
 
-> 配置项完整说明见下文「配置」章节。
-
 ## 工作原理
 
-插入 DSH 的三个 agent 扩展点：
+Router 在 dsh 的三个 agent 扩展点插入逻辑：
 
 | 事件 | 用途 |
 |------|------|
@@ -169,11 +196,28 @@ npm install github:4060415/8kinfe-llm-router
 | `agent/request` | 对 Registry 中每个模型评分，改写 provider/model |
 | `agent/request-error` | 失败恢复：先委托给下游重试（如 `llm-retry`），再 fallback / escalation |
 
+一次请求的处理流程：
+
+```mermaid
+flowchart LR
+    A[用户消息] --> B["agent/pre-step<br/>任务分类"]
+    B --> C["agent/request<br/>对每个模型评分"]
+    C --> D{选中可用模型}
+    D -->|无可用| E[保持原路由]
+    D -->|有可用| F[调用该模型]
+    F --> G{调用结果}
+    G -->|成功| H[返回结果]
+    G -->|临时 / 资源错误| I["fallback<br/>换 provider"]
+    G -->|能力不足| J["escalation<br/>升级模型"]
+    I --> F
+    J --> F
+```
+
 Provider 连接由 `dsh-llm-pi-ai` 等适配器负责；Router 只存「provider 名 + model 名 + 能力元数据」，与 endpoint / API Key 完全解耦。
 
-## 配置
+## 配置参考
 
-### 插件入口（cordis.yml）
+### 插件入口（cordis.patch.yml）
 
 ```yaml
 - id: llm-router
@@ -183,23 +227,23 @@ Provider 连接由 `dsh-llm-pi-ai` 等适配器负责；Router 只存「provider
     costPolicy: balanced
     maxEscalations: 2
     preferred:
-      provider: openai
-      model: gpt-4o-mini
+      provider: deepseek-official
+      model: deepseek-v4-flash
     models:
-      # key = "provider/model"
-      openai/gpt-4o-mini:
+      # key = "provider/model"，替换成你实际的 provider / model
+      deepseek-official/deepseek-v4-flash:
         coding: 0.6
         reasoning: 0.6
-        vision: 1
+        vision: 0
         cost: 1
         latency: 1
         context: 128000
-      openai/gpt-4o:
-        coding: 0.85
-        reasoning: 0.85
+      moonshotai-cn/kimi-k2.6:
+        coding: 0.5
+        reasoning: 0.7
         vision: 1
-        cost: 4
-        latency: 3
+        cost: 3
+        latency: 2
         context: 128000
 ```
 
@@ -210,7 +254,7 @@ Provider 连接由 `dsh-llm-pi-ai` 等适配器负责；Router 只存「provider
 | `enabled` | boolean | `true` | 总开关，关闭后 Router 完全惰性 |
 | `mode` | `auto` \| `manual` | `auto` | `manual` 时永不改写调用方的选择 |
 | `debug` | boolean | `false` | 输出选型解释日志 |
-| `costPolicy` | `quality_first` \| `balanced` \| `cost_first` \| `speed_first` | `balanced` | 成本/延迟姿态 |
+| `costPolicy` | `quality_first` \| `balanced` \| `cost_first` \| `speed_first` | `balanced` | 成本 / 延迟姿态 |
 | `maxEscalations` | number | `2` | 每个 agent 自动升级次数上限 |
 | `preferred` | `{provider, model}` | — | `auto` 模式下 simple_chat 的偏好模型 |
 | `models` | dict | `{}` | 能力元数据，key 为 `provider/model` |
@@ -246,14 +290,14 @@ enabled: true
 triggerCodes: [EMPTY_RESPONSE, CONTEXT_WINDOW_EXCEEDED]
 ```
 
-`fallback` 默认（临时/资源错误触发换模型）：
+`fallback` 默认（临时 / 资源错误触发换模型）：
 
 ```yaml
 enabled: true
 routes: {}   # 可显式指定 code -> {provider, model}
 ```
 
-## Fallback 与 Escalation 的区别
+## Fallback 与 Escalation
 
 - **Fallback**：`RATE_LIMIT` / `QUOTA` / `SERVER` / `TIMEOUT` / `TRANSPORT` / `AUTH` 等临时或资源性错误 → 换到另一个 provider（显式 `fallback.routes[code]` 优先，否则自动选不同 provider 的最强模型）。
 - **Escalation**：`EMPTY_RESPONSE` / `CONTEXT_WINDOW_EXCEEDED` 等能力不足 → 升级到能力更强的模型，受 `maxEscalations` 限制。
@@ -270,10 +314,41 @@ routes: {}   # 可显式指定 code -> {provider, model}
 
 模型只能从已注册的 Model Registry 中选择。任何「模型推荐」（包括显式配置的 fallback 路由）都必须经过 `ModelRegistry.resolve()` 验证命中已注册模型后才会执行；API Key、endpoint、权限、系统配置对模型不可写。
 
+## 常见问题
+
+**Q：为什么没有切到我预期的模型？**
+
+按顺序排查：
+
+1. 目标模型是否真的注册在 Registry 里（`models` 的 key 要和 `provider/model` 完全一致）。
+2. `mode` 是否为 `auto`（`manual` 下 Router 不动模型）。
+3. 是否手动用 `/model` 切换过（手动覆盖会被尊重）。
+4. 开 `debug: true` 看选型日志，确认分类与评分是否符合预期。
+
+**Q：怎么知道 Router 每次选了哪个模型？**
+
+设 `debug: true`，日志会打印每次请求的任务分类、各模型评分和最终选择（`llm-router: ...` 前缀）。
+
+**Q：某个模型不支持图片怎么办？**
+
+在 `models` 里把它的 `vision` 标成 `0`，Router 遇到图片任务就会跳过它；不标的话会从适配器报告的 `inputModalities` 自动推断。
+
+**Q：能完全关掉自动路由吗？**
+
+能。设 `mode: manual` 让 Router 永不改写，或设 `enabled: false` 让插件完全惰性。
+
+**Q：fallback 和 escalation 有什么区别？**
+
+fallback 处理「临时 / 资源」错误（限流、超时等），换到**另一个 provider**；escalation 处理「能力不足」（空回复、超上下文），升级到**更强模型**。
+
 ## 测试
 
 ```bash
 npm test
 ```
 
-覆盖规格书 Test 1–7：普通/复杂 coding 选型、图片选型、复杂视觉选型、Flash→Pro 升级、429 fallback、手动覆盖不被覆盖。
+覆盖规格书 Test 1–7：普通 / 复杂 coding 选型、图片选型、复杂视觉选型、Flash→Pro 升级、429 fallback、手动覆盖不被覆盖。
+
+## License
+
+[MIT](./LICENSE) © 2026 8Kinfe
