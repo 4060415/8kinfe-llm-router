@@ -1,4 +1,4 @@
-# 8kinfe-llm-router
+# DeepSeek Harness 专用自动路由插件
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4E6EF2)](https://github.com/deepseek-ai/deepseek-harness)
